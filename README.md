@@ -165,6 +165,14 @@ bun run typecheck   # 类型检查
 
 ---
 
+## 社区
+
+问题反馈与功能建议请使用 [GitHub Issues](../../issues)，填写要求见 [贡献说明](CONTRIBUTING.md)。
+
+感谢 [LINUX DO](https://linux.do/) 社区提供开放、友善的技术交流平台。
+
+---
+
 ## 许可证与免责声明
 
 代码以 [MIT License](LICENSE) 开源。

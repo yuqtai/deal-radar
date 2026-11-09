@@ -1,0 +1,10 @@
+{
+  "name": "@hatch/space-sdk",
+  "version": "0.0.0-local",
+  "type": "module",
+  "exports": {
+    ".": "./server.ts",
+    "./client": "./client.tsx",
+    "./build": "./build.ts"
+  }
+}

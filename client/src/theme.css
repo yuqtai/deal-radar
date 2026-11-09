@@ -1,0 +1,85 @@
+@import "tailwindcss";
+@import "tailwindcss-safe-area";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  --text-4xl: 36px;
+  --text-4xl--line-height: 40px;
+  --text-5xl: 48px;
+  --text-5xl--line-height: 52px;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+/* shadcn/ui zinc theme */
+:root {
+  color-scheme: light dark;
+  --bg: #fafafa; /* zinc-50 */
+  --surface: #ffffff; /* white / card */
+  --surface-alt: #f4f4f5; /* zinc-100, secondary */
+  --text: #09090b; /* zinc-950, foreground */
+  --dim: #71717a; /* zinc-500, muted-foreground */
+  --border: #e4e4e7; /* zinc-200 */
+  --accent: #18181b; /* zinc-900, primary */
+  --accent-foreground: #fafafa;
+  --accent-soft: #f4f4f5; /* zinc-100 */
+  --destructive: #dc2626; /* red-600 */
+  --ring: #18181b;
+  --radius: 12px; /* rounded-xl for cards */
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface-alt);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #09090b; /* zinc-950 */
+    --surface: #18181b; /* zinc-900, card on dark */
+    --surface-alt: #27272a; /* zinc-800 */
+    --text: #fafafa; /* zinc-50 */
+    --dim: #a1a1aa; /* zinc-400, muted-foreground */
+    --border: #27272a; /* zinc-800 */
+    --accent: #fafafa; /* primary in dark mode */
+    --accent-foreground: #18181b;
+    --accent-soft: #27272a;
+    --destructive: #f87171; /* red-400 for dark readability */
+    --ring: #d4d4d8;
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.font-display {
+  font-family: var(--font-sans);
+  letter-spacing: -0.025em;
+}
+
+/* 长列表渲染优化：屏外卡片跳过布局/绘制，滚动更顺 */
+.deal-card {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 168px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}

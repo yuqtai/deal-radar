@@ -1,0 +1,22 @@
+# 依赖与缓存
+node_modules/
+.bun-cache/
+*.tsbuildinfo
+
+# 构建产物
+client/dist/
+server/dist/
+
+# 运行数据（SQLite 数据库，含你的 Key 与抓取数据）
+data/
+
+# 密钥：只提交 .env.example
+.env
+.env.*
+!.env.example
+
+# 杂项
+*.bak
+*.log
+.DS_Store
+Thumbs.db

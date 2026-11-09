@@ -1,0 +1,10 @@
+{
+  "runtime": "typescript",
+  "platformVersion": 28,
+  "entry": "client/dist/index.html",
+  "name": "每日优惠情报",
+  "slug": "mei-ri-you-hui-qing-bao",
+  "managedCronJobs": [
+    { "id": "mei-ri-you-hui-qing-bao-refresh", "action": "refreshDeals", "schedule": "interval@2h" }
+  ]
+}

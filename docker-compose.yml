@@ -1,0 +1,14 @@
+services:
+  deals:
+    build: .
+    container_name: mei-ri-you-hui-qing-bao
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data

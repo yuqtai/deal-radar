@@ -45,6 +45,57 @@ docker compose up -d --build
 
 数据保存在 `./data/`，升级时 `git pull && docker compose up -d --build` 即可，数据不丢。
 
+### 部署到 Muse（交给 AI 一键部署）
+
+在 Muse 里新建对话，把下面整段提示词粘贴进去，Muse 会自动拉取代码、适配平台 SDK、迁移数据库、构建并部署，最后向你要推送和 AI 的 Key（可跳过）。
+
+> 说明：这段提示词根据项目代码编写，作者没有在 Muse 上实际跑过。平台的 SDK 路径和 `platformVersion` 可能有变化，提示词已要求 Muse 以平台实际值为准。部署遇到问题欢迎提 Issue。
+
+<details>
+<summary><b>点击展开 Muse 部署提示词</b>（复制全部内容）</summary>
+
+```text
+请帮我把开源项目 Deal Radar（每日优惠情报）部署成一个 Muse TypeScript Space，要求部署完能直接打开使用、每 2 小时自动刷新。
+
+仓库：https://github.com/yuqtai/deal-radar
+
+## 项目背景
+- 这个项目最初就是 Muse TypeScript Space 结构（space.json、client/、server/src/actions.ts、drizzle/ 迁移），后来为了脱离平台独立运行，加了 standalone/ 目录，里面是 @hatch/space-sdk 的本地实现。
+- 部署到 Muse 时，要换回平台提供的真实 SDK。standalone/ 目录不参与 Space 运行。
+
+## 部署步骤
+1. 拉取仓库 main 分支的全部代码。
+2. 修改 package.json：
+   - 把 "@hatch/space-sdk": "file:./standalone/space-sdk" 改回平台 SDK 的路径，原值是 "file:/opt/hatch/skills/spaces/ts-runtime/dist/space-sdk.tgz"。如果当前平台的 SDK 路径不同，以平台实际路径为准。
+   - 删除 scripts 里的 "start" 和 "dev"（它们是独立运行用的），保留 typecheck / build / build:server / build:client。
+   - bun-plugin-tailwind 这个 devDependency 如果和平台构建冲突，可以删掉，平台 SDK 自带 Tailwind 构建。
+3. 检查 bunfig.toml：如果末尾的 [serve.static] plugins 配置和平台冲突，删掉这一段，其余保持不变。
+4. space.json 保持原样。它已经声明了 runtime=typescript、entry=client/dist/index.html，以及每 2 小时调用 refreshDeals 的托管定时任务（managedCronJobs）。如果当前平台要求的 platformVersion 不同，按平台要求更新。
+5. 数据库：按文件名顺序应用 drizzle/ 下的全部迁移（0001 到 0006，drizzle/meta/_journal.json 里有登记）。不要跳过，也不要修改已有迁移。
+6. 运行 bun install、bun run typecheck、bun run build，确认全部通过。如果类型检查报错，先确认是不是 SDK 版本的类型差异，修复时不要改动业务逻辑（抓取、分类、AI 评分、推送规则）。
+7. 部署 Space，打开页面。数据库为空时页面会自动抓取一轮，确认 6 个来源能显示状态、列表有数据。
+
+## 可选：开启 AI 评分和微信推送
+服务端只从数据库 app_settings 表读取密钥，永远不下发给前端。部署完成后问我要以下 Key，拿到后写入 app_settings 表；我没提供的就跳过，项目会自动关闭对应功能。
+- xizhi_key：息知微信推送 Key（XZ 开头，只要 Key 本身，不要完整 URL）
+- openrouter_key：OpenRouter Key（sk-or-v1- 开头），用于 AI 价值评分、分类和排行榜
+- 可选 openrouter_model：默认 parallel/decisions-fast:free，一般不用填
+- 可选 push_quiet_hours：推送静默时段（北京时间），默认 "23-8"，写 "off" 关闭
+
+写入方式：INSERT INTO app_settings (key, value) VALUES ('<key>', '<value>') ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+
+写入后请：
+- 点页面右上角「测试推送」，确认我的微信能收到
+- 如果配置了 OpenRouter，点筛选栏上方的「N 条待 AI 评分」，确认 AI 排行榜有数据
+
+## 注意
+- 不要把任何 Key 写进源码、space.json 或提交到仓库。
+- 不要改动 server/src/actions.ts 和 server/src/ai.ts 里的业务规则，除非是为了适配 SDK 接口。
+- 部署完成后告诉我：页面地址、来源抓取状态、推送和 AI 是否已开启，以及你为适配平台改了哪些文件。
+```
+
+</details>
+
 ---
 
 ## 配置
@@ -142,7 +193,7 @@ bun run typecheck   # 类型检查
 
 本项目最初是在 Muse 的 Web Artifact（TypeScript Space）运行时上写的，业务代码通过 `@hatch/space-sdk` 调用服务端动作和数据库。为了能脱离那个平台独立运行，仓库在 `standalone/space-sdk/` 里提供了这个 SDK 的本地实现，`package.json` 默认就指向它，**普通用户不需要关心这一点**。
 
-如果你确实要部署回 Muse，把 `package.json` 里的 `@hatch/space-sdk` 改回平台提供的路径即可。`space.json` 里已经声明了每 2 小时刷新的托管定时任务。
+如果要部署回 Muse，可以直接用上文的 [Muse 部署提示词](#部署到-muse交给-ai-一键部署) 交给 AI 完成。手动部署的话，把 `package.json` 里的 `@hatch/space-sdk` 改回平台提供的路径即可。`space.json` 里已经声明了每 2 小时刷新的托管定时任务。
 
 ---
 

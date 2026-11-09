@@ -288,8 +288,19 @@ async function inQuietHours(ctx: Ctx, now: number): Promise<boolean> {
   return start <= end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
+// 推送来源开关：app_settings.push_sources_off = 不推送的来源 key（逗号分隔）。
+// 存「关闭」名单而不是「开启」名单：以后新增的来源默认推送。
+const PUSH_SOURCES_OFF = "push_sources_off";
+
+async function getPushSourcesOff(ctx: Ctx): Promise<Set<string>> {
+  const db = ctx.db<typeof schema>();
+  const rows = await db.select().from(schema.appSettings).where(eq(schema.appSettings.key, PUSH_SOURCES_OFF));
+  return new Set((rows[0]?.value ?? "").split(",").map((x) => x.trim()).filter(Boolean));
+}
+
 async function loadPushCandidates(ctx: Ctx, now: number): Promise<PushCandidate[]> {
   const db = ctx.db<typeof schema>();
+  const off = await getPushSourcesOff(ctx);
   const rows = await db
     .select()
     .from(schema.deals)
@@ -302,6 +313,7 @@ async function loadPushCandidates(ctx: Ctx, now: number): Promise<PushCandidate[
     );
   return rows
     .filter((d) => d.expiresAt == null || d.expiresAt > now) // 已过期的不推
+    .filter((d) => !off.has(sourceKeyFromSourceName(d.source))) // 用户关闭推送的来源
     .map((d) => ({
       id: d.id,
       title: d.title,
@@ -733,7 +745,7 @@ const statsShape = z.object({
   onShelf: z.number(),
   newCount: z.number(),
   errors: z.array(z.object({ source: z.string(), error: z.string() })),
-  sources: z.array(z.object({ name: z.string(), count: z.number(), ok: z.boolean() })),
+  sources: z.array(z.object({ key: z.string(), name: z.string(), count: z.number(), ok: z.boolean(), push: z.boolean() })),
   aiEnabled: z.boolean(),
   aiPending: z.number(),
 });
@@ -779,6 +791,7 @@ async function buildDashboard(ctx: Ctx): Promise<Dashboard> {
   const lastRun = runRows[0] ?? null;
   const statusByName = new Map(statusRows.map((s) => [s.source, s]));
   const countByName = new Map(countRows.map((c) => [c.source, c.n]));
+  const pushOff = await getPushSourcesOff(ctx);
   const errors = SOURCES.filter((s) => {
     const st = statusByName.get(s.name);
     return st != null && st.ok === 0;
@@ -795,7 +808,9 @@ async function buildDashboard(ctx: Ctx): Promise<Dashboard> {
       newCount: lastRun?.newCount ?? 0,
       errors,
       sources: SOURCES.map((s) => ({
+        key: s.key,
         name: s.name,
+        push: !pushOff.has(s.key),
         count: countByName.get(s.name) ?? 0,
         ok: statusByName.get(s.name)?.ok === 1,
       })),
@@ -1091,6 +1106,21 @@ export const Actions = {
     },
   }),
 
+  setPushSource: defineAction({
+    description: "设置某个来源的优惠是否参与微信推送（不影响抓取与页面展示）。",
+    request: z.object({ key: z.string().min(1), enabled: z.boolean() }),
+    response: z.object({ ok: z.literal(true) }),
+    async handler(ctx, args): Promise<{ ok: true }> {
+      if (!SOURCES.some((s) => s.key === args.key)) throw new Error(`未知来源 ${args.key}`);
+      const off = await getPushSourcesOff(ctx);
+      if (args.enabled) off.delete(args.key);
+      else off.add(args.key);
+      await setAppSetting(ctx, PUSH_SOURCES_OFF, [...off].join(","));
+      ctx.invalidateQueries();
+      return { ok: true as const };
+    },
+  }),
+
   sendTestPush: defineAction({
     description: "发送一条息知微信测试推送，验证推送链路是否接通；不返回任何密钥信息。",
     request: z.object({}),
@@ -1106,7 +1136,10 @@ export const Actions = {
           .from(schema.deals)
           .orderBy(desc(schema.deals.firstSeenAt))
           .limit(60);
-        const candidates: PushCandidate[] = rows.map((d) => ({
+        const off = await getPushSourcesOff(ctx);
+        const candidates: PushCandidate[] = rows
+          .filter((d) => !off.has(sourceKeyFromSourceName(d.source)))
+          .map((d) => ({
           title: d.title,
           summary: d.summary,
           source: d.source,

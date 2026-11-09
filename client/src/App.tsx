@@ -528,6 +528,31 @@ export function App() {
     onError: () => setToast({ ok: false, text: "测试推送发送失败，请稍后再试" }),
   });
 
+  // 推送来源开关（乐观更新）
+  const [pushPanel, setPushPanel] = useState(false);
+  const setPushSource = useMutation({
+    mutationFn: (args: { key: string; enabled: boolean }) => api.setPushSource(args),
+    onMutate: async (args) => {
+      await queryClient.cancelQueries({ queryKey: ["dashboard"] });
+      const prev = queryClient.getQueryData<Dashboard>(["dashboard"]);
+      if (prev) {
+        queryClient.setQueryData<Dashboard>(["dashboard"], {
+          ...prev,
+          stats: {
+            ...prev.stats,
+            sources: prev.stats.sources.map((s) => (s.key === args.key ? { ...s, push: args.enabled } : s)),
+          },
+        });
+      }
+      return { prev };
+    },
+    onError: (_e, _a, c) => {
+      if (c?.prev) queryClient.setQueryData(["dashboard"], c.prev);
+      setToast({ ok: false, text: "保存失败，已恢复原状态" });
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["dashboard"] }),
+  });
+
   // 首次打开且库里还没有任何一轮抓取时，自动抓一轮。
   useEffect(() => {
     if (dashboard.data && dashboard.data.stats.lastRunAt == null && !autoRefreshed.current && !refresh.isPending) {
@@ -678,6 +703,15 @@ export function App() {
               </button>
               <button
                 type="button"
+                aria-expanded={pushPanel}
+                onClick={() => setPushPanel((v) => !v)}
+                title="选择哪些网站的优惠推送到微信"
+                className={`inline-flex h-9 items-center justify-center rounded-md px-3 text-sm font-medium transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text)] ${pushPanel ? "bg-[var(--accent-soft)] text-[var(--text)]" : "text-[var(--dim)]"}`}
+              >
+                推送来源
+              </button>
+              <button
+                type="button"
                 disabled={refreshing}
                 onClick={() => refresh.mutate()}
                 className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-4 text-sm font-medium text-[var(--accent-foreground)] shadow transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-60"
@@ -709,6 +743,37 @@ export function App() {
               </>
             )}
           </p>
+
+          {pushPanel && stats != null && (
+            <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-[var(--text)]">微信推送哪些网站</p>
+                <span className="text-xs text-[var(--dim)]">
+                  已选 {stats.sources.filter((s) => s.push).length}/{stats.sources.length} · 只影响推送，不影响页面展示
+                </span>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {stats.sources.map((s) => (
+                  <button
+                    key={s.key}
+                    type="button"
+                    role="switch"
+                    aria-checked={s.push}
+                    onClick={() => setPushSource.mutate({ key: s.key, enabled: !s.push })}
+                    className={`inline-flex h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition-colors ${
+                      s.push
+                        ? "border-transparent bg-[var(--accent)] text-[var(--accent-foreground)]"
+                        : "border-[var(--border)] text-[var(--dim)] line-through decoration-1 hover:text-[var(--text)]"
+                    }`}
+                  >
+                    <SourceLogo source={s.name} size={14} />
+                    {s.push ? "✓ " : ""}
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* 来源：健康状态 + 在架数，同时就是来源筛选（原来的状态行与来源筛选合并） */}
           {stats != null && stats.sources.length > 0 && (

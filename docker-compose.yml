@@ -1,7 +1,7 @@
 services:
   deals:
     build: .
-    container_name: mei-ri-you-hui-qing-bao
+    container_name: deal-radar
     restart: unless-stopped
     ports:
       - "3000:3000"

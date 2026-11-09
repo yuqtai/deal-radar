@@ -1,4 +1,4 @@
-# 每日优惠情报
+# Deal Radar · 每日优惠情报
 
 多来源羊毛 / 优惠聚合：自动从 V2EX、NodeSeek、LINUX DO、小众软件等 6 个来源抓取最新优惠，**AI 打价值分、自动分类、生成排行榜**，值得看的新优惠通过微信推送给你。
 
@@ -25,8 +25,8 @@ powershell -c "irm bun.sh/install.ps1 | iex"
 **运行**：
 
 ```bash
-git clone <你的仓库地址> mei-ri-you-hui-qing-bao
-cd mei-ri-you-hui-qing-bao
+git clone https://github.com/yuqtai/deal-radar.git
+cd deal-radar
 bun install
 cp .env.example .env      # 可选：填入推送 / AI 的 Key，不填也能跑
 bun run start

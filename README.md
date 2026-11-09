@@ -49,7 +49,7 @@ docker compose up -d --build
 
 在 Muse 里新建对话，把下面整段提示词粘贴进去，Muse 会自动拉取代码、适配平台 SDK、迁移数据库、构建并部署，最后向你要推送和 AI 的 Key（可跳过）。
 
-> 说明：这段提示词根据项目代码编写，作者没有在 Muse 上实际跑过。平台的 SDK 路径和 `platformVersion` 可能有变化，提示词已要求 Muse 以平台实际值为准。部署遇到问题欢迎提 Issue。
+> ✅ 已在 Muse 上实测部署通过。平台的 SDK 路径和 `platformVersion` 以后可能变化，提示词已要求 Muse 以平台实际值为准。部署遇到问题欢迎提 Issue。
 
 <details>
 <summary><b>点击展开 Muse 部署提示词</b>（复制全部内容）</summary>

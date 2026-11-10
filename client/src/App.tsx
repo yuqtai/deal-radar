@@ -147,9 +147,9 @@ function expiryInfo(ms: number | null): { label: string; urgent: boolean; past: 
   return { label, urgent: remain > 0 && remain <= 2 * 24 * 3600 * 1000, past: remain <= 0 };
 }
 
-/** AI 分（0~1）→ 0~100 整数 */
+/** AI 分 → 0~100 展示分（模型原始分偏低，按 0.5 封顶映射，与微信推送一致） */
 function aiPoints(score: number): number {
-  return Math.round(score * 100);
+  return Math.max(0, Math.min(100, Math.round((score / 0.5) * 100)));
 }
 
 function aiTier(score: number): { label: string; cls: string } {

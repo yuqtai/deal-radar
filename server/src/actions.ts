@@ -227,35 +227,55 @@ function escapeMdLinkUrl(u: string): string {
   return u.replace(/\(/g, "%28").replace(/\)/g, "%29").replace(/\s/g, "%20");
 }
 
-function buildPushBlock(d: PushCandidate): string {
-  const head = `[${escapeMdLinkText(`${d.source} · ${d.title}`)}](${escapeMdLinkUrl(d.link)})`;
-  const parts: string[] = [];
-  const summary = d.summary.trim();
-  if (summary) parts.push(truncate(summary, 80));
-  let meta = d.category;
-  if (d.aiScore != null) {
-    const pts = Math.round(d.aiScore * 100);
-    const tier = d.aiScore >= 0.4 ? "🔥高价值" : d.aiScore >= 0.3 ? "👍值得看" : "";
-    meta = `${tier ? `${tier} ` : ""}AI ${pts} · ${meta}`;
-  }
+// AI 价值分醒目展示：「🔥 82 分 · 高价值 ▰▰▰▰▰▰▰▰▱▱」作为每条的第一行。
+// 模型原始分偏低（≥0.4 已是头部），展示时按 0.5 封顶映射到 0~100，更符合直觉。
+function aiDisplayScore(score: number): number {
+  return Math.max(0, Math.min(100, Math.round((score / 0.5) * 100)));
+}
+
+function aiTier(score: number): { icon: string; label: string } {
+  if (score >= 0.4) return { icon: "🔥", label: "高价值" };
+  if (score >= 0.3) return { icon: "👍", label: "值得看" };
+  if (score >= 0.15) return { icon: "🙂", label: "一般" };
+  return { icon: "💤", label: "价值低" };
+}
+
+function scoreBar(pts: number): string {
+  const n = Math.round(pts / 10);
+  return "▰".repeat(n) + "▱".repeat(10 - n);
+}
+
+function buildScoreLine(d: PushCandidate): string {
+  if (d.aiScore == null) return "📋 **规则筛选**（暂无 AI 分）";
+  const pts = aiDisplayScore(d.aiScore);
+  const t = aiTier(d.aiScore);
+  return `${t.icon} **AI ${pts} 分 · ${t.label}**　${scoreBar(pts)}`;
+}
+
+function buildPushBlock(d: PushCandidate, index?: number): string {
+  const lines: string[] = [];
+  lines.push(`${index != null ? `**${index}.** ` : ""}${buildScoreLine(d)}`);
+  lines.push(`[${escapeMdLinkText(d.title)}](${escapeMdLinkUrl(d.link)})`);
+  const meta: string[] = [d.source, d.category];
   if (d.publishedAt != null) {
-    // 北京时间，例如「11/9 11:46 发布」
     const bj = new Date(d.publishedAt + 8 * 3600 * 1000);
     const hh = String(bj.getUTCHours()).padStart(2, "0");
     const mm = String(bj.getUTCMinutes()).padStart(2, "0");
-    meta += ` · ${bj.getUTCMonth() + 1}/${bj.getUTCDate()} ${hh}:${mm} 发布`;
+    meta.push(`${bj.getUTCMonth() + 1}/${bj.getUTCDate()} ${hh}:${mm} 发布`);
   }
   if (d.expiresAt != null) {
-    const dt = new Date(d.expiresAt);
-    meta += ` · ${dt.getMonth() + 1}/${dt.getDate()} 到期`;
+    const dt = new Date(d.expiresAt + 8 * 3600 * 1000);
+    meta.push(`⏰ ${dt.getUTCMonth() + 1}/${dt.getUTCDate()} 到期`);
   }
-  if (meta) parts.push(meta);
-  const detail = parts.join(" · ");
-  return detail ? `${head}\n\n${detail}` : head;
+  lines.push(meta.join(" · "));
+  const summary = d.summary.trim();
+  if (summary) lines.push(`> ${truncate(summary.replace(/\s+/g, " "), 80)}`);
+  // Markdown 单换行会被合并，段落之间必须空行
+  return lines.join("\n\n");
 }
 
 function buildPushContent(picked: PushCandidate[], totalNew: number): string {
-  const body = picked.map((d, i) => `**${i + 1}.** ${buildPushBlock(d)}`).join("\n\n---\n\n");
+  const body = picked.map((d, i) => buildPushBlock(d, i + 1)).join("\n\n---\n\n");
   const footer = `……本轮共新增 ${totalNew} 条，打开页面查看全部与 AI 排行榜`;
   return body ? `${body}\n\n${footer}` : footer;
 }
@@ -264,8 +284,9 @@ function buildPushContent(picked: PushCandidate[], totalNew: number): string {
 function buildPushTitle(picked: PushCandidate[]): string {
   const top = picked[0];
   if (!top) return "每日优惠情报";
-  const head = truncate(top.title.replace(/\s+/g, " ").trim(), 22);
-  return picked.length > 1 ? `🔥 ${head} 等 ${picked.length} 条优惠` : `🔥 ${head}`;
+  const head = truncate(top.title.replace(/\s+/g, " ").trim(), 20);
+  const score = top.aiScore != null ? `${aiDisplayScore(top.aiScore)}分 ` : "";
+  return picked.length > 1 ? `🔥${score}${head} 等 ${picked.length} 条` : `🔥${score}${head}`;
 }
 
 // ---------- 推送节奏 ----------
@@ -1154,7 +1175,7 @@ export const Actions = {
         const sampleDeals = picked.slice(0, 2);
         const content =
           sampleDeals.length > 0
-            ? `${sampleDeals.map((d, i) => `**${i + 1}.** ${buildPushBlock(d)}`).join("\n\n---\n\n")}\n\n（测试推送：当前达标前 2 条，标题可点击）`
+            ? `${sampleDeals.map((d, i) => buildPushBlock(d, i + 1)).join("\n\n---\n\n")}\n\n（测试推送：当前达标前 2 条，标题可点击）`
             : "[LINUX DO 福利羊毛 · LINUX DO 首页](https://linux.do/)\n\n（测试推送：当前暂无达标条目，这是固定格式样例，标题可点击）";
         const result = await sendXizhiPush(
           ctx,

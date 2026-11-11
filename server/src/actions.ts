@@ -809,6 +809,31 @@ type Dashboard = z.infer<typeof dashboardResponse>;
 
 const setDealStateResponse = z.object({ ok: z.literal(true) });
 
+const keyStatus = z.object({ set: z.boolean(), tail: z.string(), fromEnv: z.boolean() });
+const settingsResponse = z.object({
+  xizhi: keyStatus,
+  openrouter: keyStatus,
+  jina: keyStatus,
+  quietHours: z.string(),
+});
+
+async function readSettings(ctx: Ctx): Promise<z.infer<typeof settingsResponse>> {
+  const db = ctx.db<typeof schema>();
+  const rows = await db.select().from(schema.appSettings);
+  const map = new Map(rows.map((r) => [r.key, (r.value ?? "").trim()]));
+  const envManaged = new Set((map.get("env_managed") ?? "").split(",").filter(Boolean));
+  const st = (k: string) => {
+    const v = map.get(k) ?? "";
+    return { set: v !== "", tail: v.length > 8 ? v.slice(-4) : "", fromEnv: envManaged.has(k) };
+  };
+  return {
+    xizhi: st(XIZHI_KEY_SETTING),
+    openrouter: st("openrouter_key"),
+    jina: st("jina_key"),
+    quietHours: map.get("push_quiet_hours") || "23-8",
+  };
+}
+
 const testPushResponse = z.object({ ok: z.boolean(), message: z.string() });
 
 async function buildDashboard(ctx: Ctx): Promise<Dashboard> {
@@ -1171,6 +1196,52 @@ export const Actions = {
       await setAppSetting(ctx, PUSH_SOURCES_OFF, [...off].join(","));
       ctx.invalidateQueries();
       return { ok: true as const };
+    },
+  }),
+
+  getSettings: defineAction({
+    description: "读取页面设置的配置状态：只返回是否已配置和末 4 位，永不返回完整密钥。",
+    request: z.object({}),
+    response: settingsResponse,
+    async handler(ctx): Promise<z.infer<typeof settingsResponse>> {
+      return readSettings(ctx);
+    },
+  }),
+
+  saveSettings: defineAction({
+    description: "在页面上保存密钥/推送设置。字段不传 = 不改，传空字符串 = 清除。",
+    request: z.object({
+      xizhiKey: z.string().max(300).optional(),
+      openrouterKey: z.string().max(300).optional(),
+      jinaKey: z.string().max(300).optional(),
+      quietHours: z.string().max(20).optional(),
+    }),
+    response: settingsResponse,
+    async handler(ctx, args): Promise<z.infer<typeof settingsResponse>> {
+      if (args.xizhiKey !== undefined) {
+        // 允许直接粘完整推送地址，自动提取 Key
+        const v = args.xizhiKey.trim();
+        const m = v.match(/(XZ[0-9a-zA-Z]+)/);
+        if (v && !m) throw new Error("息知 Key 格式不对：应为 XZ 开头，或粘贴完整推送地址");
+        await setAppSetting(ctx, XIZHI_KEY_SETTING, m?.[1] ?? "");
+      }
+      if (args.openrouterKey !== undefined) {
+        const v = args.openrouterKey.trim();
+        if (v && !v.startsWith("sk-or-")) throw new Error("OpenRouter Key 格式不对：应为 sk-or- 开头");
+        await setAppSetting(ctx, "openrouter_key", v);
+      }
+      if (args.jinaKey !== undefined) {
+        const v = args.jinaKey.trim();
+        if (v && !/^jina_\w+$/.test(v)) throw new Error("Jina Key 格式不对：应为 jina_ 开头");
+        await setAppSetting(ctx, "jina_key", v);
+      }
+      if (args.quietHours !== undefined) {
+        const v = args.quietHours.trim() || "23-8";
+        if (v !== "off" && !/^\d{1,2}-\d{1,2}$/.test(v)) throw new Error("静默时段格式：如 23-8，或 off 关闭");
+        await setAppSetting(ctx, "push_quiet_hours", v);
+      }
+      ctx.invalidateQueries();
+      return readSettings(ctx);
     },
   }),
 

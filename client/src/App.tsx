@@ -349,6 +349,178 @@ function loadFilters(): Filters {
   }
 }
 
+type Settings = ApiResponse<typeof api, "getSettings">;
+type KeyField = "xizhiKey" | "openrouterKey" | "jinaKey";
+
+const KEY_FIELDS: {
+  field: KeyField;
+  stat: "xizhi" | "openrouter" | "jina";
+  label: string;
+  hint: string;
+  placeholder: string;
+  href: string;
+}[] = [
+  {
+    field: "xizhiKey",
+    stat: "xizhi",
+    label: "微信推送 · 息知 Key",
+    hint: "开启微信推送，可直接粘贴完整推送地址",
+    placeholder: "XZ… 或 https://xizhi.qqoq.net/XZ….send",
+    href: "https://xz.qqoq.net/",
+  },
+  {
+    field: "openrouterKey",
+    stat: "openrouter",
+    label: "AI 评分 · OpenRouter Key",
+    hint: "开启 AI 价值分、分类和排行榜（免费模型）",
+    placeholder: "sk-or-v1-…",
+    href: "https://openrouter.ai/keys",
+  },
+  {
+    field: "jinaKey",
+    stat: "jina",
+    label: "LINUX DO 抓取 · Jina Key（可选）",
+    hint: "LINUX DO 显示异常 / HTTP 429 限流时填写",
+    placeholder: "jina_…",
+    href: "https://jina.ai/reader",
+  },
+];
+
+function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }) => void }) {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.getSettings({}) });
+  const [drafts, setDrafts] = useState<Partial<Record<KeyField, string>>>({});
+  const [quiet, setQuiet] = useState<string | null>(null);
+
+  const save = useMutation({
+    mutationFn: (args: Partial<Record<KeyField | "quietHours", string>>) => api.saveSettings(args),
+    onSuccess: (data: Settings, args) => {
+      queryClient.setQueryData(["settings"], data);
+      queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+      setDrafts((d) => {
+        const next = { ...d };
+        for (const k of Object.keys(args) as KeyField[]) delete next[k];
+        return next;
+      });
+      if ("quietHours" in args) setQuiet(null);
+      onToast({ ok: true, text: Object.values(args).every((v) => v === "") ? "已清除" : "已保存，立即生效" });
+    },
+    onError: (e) => onToast({ ok: false, text: e instanceof Error ? e.message : "保存失败" }),
+  });
+
+  const s = settings.data;
+  const inputCls =
+    "h-9 min-w-0 flex-1 rounded-md border border-[var(--border)] bg-[var(--bg)] px-2.5 font-mono text-xs text-[var(--text)] placeholder:font-sans placeholder:text-[var(--dim)] focus:outline-none focus:ring-2 focus:ring-[var(--accent)]";
+  const btnCls =
+    "inline-flex h-9 shrink-0 items-center justify-center rounded-md px-3 text-xs font-medium transition-opacity disabled:pointer-events-none disabled:opacity-50";
+
+  return (
+    <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+        <p className="text-sm font-medium text-[var(--text)]">设置</p>
+        <span className="text-xs text-[var(--dim)]">密钥只保存在服务端，页面上只显示末 4 位</span>
+      </div>
+      {!s ? (
+        <p className="mt-3 text-xs text-[var(--dim)]">{settings.isError ? "读取设置失败" : "加载中…"}</p>
+      ) : (
+        <div className="mt-3 space-y-3">
+          {KEY_FIELDS.map((f) => {
+            const st = s[f.stat];
+            const draft = drafts[f.field] ?? "";
+            return (
+              <div key={f.field}>
+                <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+                  <label htmlFor={`set-${f.field}`} className="text-xs font-medium text-[var(--text)]">
+                    {f.label}
+                  </label>
+                  <span className={`text-xs ${st.set ? "text-[var(--text)]" : "text-[var(--dim)]"}`}>
+                    {st.set ? `✓ 已配置${st.tail ? ` ····${st.tail}` : ""}` : "未配置"}
+                    {st.fromEnv && " · 来自 .env，重启后以 .env 为准"}
+                  </span>
+                </div>
+                <p className="mt-0.5 text-xs text-[var(--dim)]">
+                  {f.hint} ·{" "}
+                  <a
+                    href={f.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2 hover:text-[var(--text)]"
+                  >
+                    获取
+                  </a>
+                </p>
+                <form
+                  className="mt-1.5 flex gap-1.5"
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (draft.trim()) save.mutate({ [f.field]: draft });
+                  }}
+                >
+                  <input
+                    id={`set-${f.field}`}
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={draft}
+                    placeholder={st.set ? "粘贴新的 Key 以替换" : f.placeholder}
+                    onChange={(e) => setDrafts((d) => ({ ...d, [f.field]: e.target.value }))}
+                    className={inputCls}
+                  />
+                  <button
+                    type="submit"
+                    disabled={!draft.trim() || save.isPending}
+                    className={`${btnCls} bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90`}
+                  >
+                    保存
+                  </button>
+                  {st.set && (
+                    <button
+                      type="button"
+                      disabled={save.isPending}
+                      onClick={() => {
+                        if (window.confirm(`确定清除「${f.label}」？`)) save.mutate({ [f.field]: "" });
+                      }}
+                      className={`${btnCls} border border-[var(--border)] text-[var(--dim)] hover:text-[var(--destructive)]`}
+                    >
+                      清除
+                    </button>
+                  )}
+                </form>
+              </div>
+            );
+          })}
+          <form
+            className="flex flex-wrap items-center gap-1.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (quiet != null) save.mutate({ quietHours: quiet });
+            }}
+          >
+            <label htmlFor="set-quiet" className="text-xs font-medium text-[var(--text)]">
+              推送静默时段（北京时间）
+            </label>
+            <input
+              id="set-quiet"
+              value={quiet ?? s.quietHours}
+              onChange={(e) => setQuiet(e.target.value)}
+              placeholder="23-8"
+              className={`${inputCls} w-24 flex-none`}
+            />
+            <button
+              type="submit"
+              disabled={quiet == null || quiet === s.quietHours || save.isPending}
+              className={`${btnCls} bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90`}
+            >
+              保存
+            </button>
+            <span className="text-xs text-[var(--dim)]">如 23-8，填 off 关闭</span>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Spinner() {
   return (
     <svg aria-hidden="true" className="h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -530,6 +702,7 @@ export function App() {
 
   // 推送来源开关（乐观更新）
   const [pushPanel, setPushPanel] = useState(false);
+  const [settingsPanel, setSettingsPanel] = useState(false);
   const setPushSource = useMutation({
     mutationFn: (args: { key: string; enabled: boolean }) => api.setPushSource(args),
     onMutate: async (args) => {
@@ -712,6 +885,15 @@ export function App() {
               </button>
               <button
                 type="button"
+                aria-expanded={settingsPanel}
+                onClick={() => setSettingsPanel((v) => !v)}
+                title="填写推送 / AI 等密钥"
+                className={`inline-flex h-9 items-center justify-center rounded-md px-3 text-sm font-medium transition-colors hover:bg-[var(--accent-soft)] hover:text-[var(--text)] ${settingsPanel ? "bg-[var(--accent-soft)] text-[var(--text)]" : "text-[var(--dim)]"}`}
+              >
+                设置
+              </button>
+              <button
+                type="button"
                 disabled={refreshing}
                 onClick={() => refresh.mutate()}
                 className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-md bg-[var(--accent)] px-4 text-sm font-medium text-[var(--accent-foreground)] shadow transition-opacity hover:opacity-90 disabled:pointer-events-none disabled:opacity-60"
@@ -743,6 +925,8 @@ export function App() {
               </>
             )}
           </p>
+
+          {settingsPanel && <SettingsPanel onToast={setToast} />}
 
           {pushPanel && stats != null && (
             <div className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
@@ -957,7 +1141,7 @@ export function App() {
           ) : view === "rank" ? (
             !stats?.aiEnabled ? (
               <p className="py-12 text-center text-sm text-[var(--dim)]">
-                AI 排行榜未开启：在 .env 中填写 OPENROUTER_API_KEY（免费，https://openrouter.ai/keys 获取）后重启服务即可。
+                AI 排行榜未开启：点右上角「设置」填写 OpenRouter Key（免费）即可，无需重启。
               </p>
             ) : ranked.length === 0 ? (
               <div className="py-12 text-center">

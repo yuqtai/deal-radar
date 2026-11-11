@@ -60,6 +60,17 @@ if (isReal(process.env.OPENROUTER_MODEL)) putSetting.run("openrouter_model", pro
 if (isReal(process.env.JINA_API_KEY)) putSetting.run("jina_key", process.env.JINA_API_KEY.trim());
 if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", process.env.PUSH_QUIET_HOURS.trim());
 
+// 记下哪些配置来自 .env：页面设置里提示「重启后以 .env 为准」
+const envManaged = [
+  ["XIZHI_KEY", "xizhi_key"],
+  ["OPENROUTER_API_KEY", "openrouter_key"],
+  ["JINA_API_KEY", "jina_key"],
+  ["PUSH_QUIET_HOURS", "push_quiet_hours"],
+]
+  .filter(([env]) => isReal(process.env[env!]))
+  .map(([, key]) => key);
+putSetting.run("env_managed", envManaged.join(","));
+
 const ctx = makeCtx(sqlite);
 type ActionDef = { request: { parse(v: unknown): unknown }; handler: (c: typeof ctx, a: unknown) => Promise<unknown> };
 const actions = Actions as unknown as Record<string, ActionDef>;
@@ -99,6 +110,6 @@ const server = Bun.serve({
 console.log(`
   每日优惠情报 已启动 → http://localhost:${server.port}
   数据库：${dbPath}
-  已启用：${configured.length ? configured.join("、") : "基础抓取（未配置推送 / AI，可在 .env 中添加）"}
+  已启用：${configured.length ? configured.join("、") : "基础抓取（未配置推送 / AI，可在页面「设置」或 .env 中添加）"}
   自动刷新：${intervalMin > 0 ? `每 ${intervalMin} 分钟` : "已关闭"}
 `);

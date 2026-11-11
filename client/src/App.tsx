@@ -396,6 +396,10 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
     mutationFn: (args: Partial<Record<KeyField | "quietHours", string>>) => api.saveSettings(args),
     onSuccess: (data: Settings, args) => {
       queryClient.setQueryData(["settings"], data);
+      if (data.error) {
+        onToast({ ok: false, text: data.error });
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["dashboard"] });
       setDrafts((d) => {
         const next = { ...d };

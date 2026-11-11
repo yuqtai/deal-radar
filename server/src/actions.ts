@@ -815,6 +815,7 @@ const settingsResponse = z.object({
   openrouter: keyStatus,
   jina: keyStatus,
   quietHours: z.string(),
+  error: z.string().nullable().optional(),
 });
 
 async function readSettings(ctx: Ctx): Promise<z.infer<typeof settingsResponse>> {
@@ -1218,30 +1219,42 @@ export const Actions = {
     }),
     response: settingsResponse,
     async handler(ctx, args): Promise<z.infer<typeof settingsResponse>> {
+      // 校验失败不抛异常：托管平台会把异常统一显示成「500」，用户看不到原因。
+      // 改为在返回值里带 error，前端直接显示。
+      const clean = (v: string) => v.trim().replace(/^Bearer\s+/i, "").replace(/^["']|["']$/g, "").trim();
+      const writes: [string, string][] = [];
+      let error: string | null = null;
       if (args.xizhiKey !== undefined) {
         // 允许直接粘完整推送地址，自动提取 Key
-        const v = args.xizhiKey.trim();
-        const m = v.match(/(XZ[0-9a-zA-Z]+)/);
-        if (v && !m) throw new Error("息知 Key 格式不对：应为 XZ 开头，或粘贴完整推送地址");
-        await setAppSetting(ctx, XIZHI_KEY_SETTING, m?.[1] ?? "");
+        const v = clean(args.xizhiKey);
+        const m = v.match(/(XZ[0-9a-zA-Z]+)/i);
+        if (v && !m) error = "息知 Key 格式不对：应为 XZ 开头，或粘贴完整推送地址";
+        else writes.push([XIZHI_KEY_SETTING, m?.[1] ?? ""]);
       }
       if (args.openrouterKey !== undefined) {
-        const v = args.openrouterKey.trim();
-        if (v && !v.startsWith("sk-or-")) throw new Error("OpenRouter Key 格式不对：应为 sk-or- 开头");
-        await setAppSetting(ctx, "openrouter_key", v);
+        const v = clean(args.openrouterKey);
+        if (v && !v.startsWith("sk-or-")) error = "OpenRouter Key 格式不对：应为 sk-or- 开头";
+        else writes.push(["openrouter_key", v]);
       }
       if (args.jinaKey !== undefined) {
-        const v = args.jinaKey.trim();
-        if (v && !/^jina_\w+$/.test(v)) throw new Error("Jina Key 格式不对：应为 jina_ 开头");
-        await setAppSetting(ctx, "jina_key", v);
+        const v = clean(args.jinaKey);
+        if (v && !/^jina_[\w-]+$/.test(v)) error = "Jina Key 格式不对：应为 jina_ 开头";
+        else writes.push(["jina_key", v]);
       }
       if (args.quietHours !== undefined) {
         const v = args.quietHours.trim() || "23-8";
-        if (v !== "off" && !/^\d{1,2}-\d{1,2}$/.test(v)) throw new Error("静默时段格式：如 23-8，或 off 关闭");
-        await setAppSetting(ctx, "push_quiet_hours", v);
+        if (v !== "off" && !/^\d{1,2}-\d{1,2}$/.test(v)) error = "静默时段格式：如 23-8，或 off 关闭";
+        else writes.push(["push_quiet_hours", v]);
+      }
+      if (error) return { ...(await readSettings(ctx)), error };
+      try {
+        for (const [k, v] of writes) await setAppSetting(ctx, k, v);
+      } catch (e) {
+        console.error("[settings] save failed:", e);
+        return { ...(await readSettings(ctx)), error: `保存失败：${e instanceof Error ? e.message : String(e)}` };
       }
       ctx.invalidateQueries();
-      return readSettings(ctx);
+      return { ...(await readSettings(ctx)), error: null };
     },
   }),
 

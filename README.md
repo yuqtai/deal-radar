@@ -81,6 +81,7 @@ docker compose up -d --build
 - openrouter_key：OpenRouter Key（sk-or-v1- 开头），用于 AI 价值评分、分类和排行榜
 - 可选 openrouter_model：默认 parallel/decisions-fast:free，一般不用填
 - 可选 push_quiet_hours：推送静默时段（北京时间），默认 "23-8"，写 "off" 关闭
+- 可选 jina_key：Jina Reader Key，LINUX DO 来源显示异常（HTTP 429 限流）时填写，在 https://jina.ai/reader 免费申请
 
 写入方式：INSERT INTO app_settings (key, value) VALUES ('<key>', '<value>') ON CONFLICT(key) DO UPDATE SET value = excluded.value;
 
@@ -111,6 +112,7 @@ docker compose up -d --build
 | `DATA_DIR` | 数据目录（SQLite） | `./data` |
 | `REFRESH_INTERVAL_MINUTES` | 自动刷新间隔，`0` 关闭 | `120` |
 | `PUSH_QUIET_HOURS` | 推送静默时段（北京时间），`off` 关闭 | `23-8` |
+| `JINA_API_KEY` | Jina Reader Key，LINUX DO 被限流（HTTP 429）时配置，[免费申请](https://jina.ai/reader) | 空 |
 
 修改 `.env` 后重启服务生效。启动时 Key 会写入数据库 `app_settings` 表，服务端只从那里读取，**永远不会发到前端**。
 
@@ -201,7 +203,7 @@ bun run typecheck   # 类型检查
 ## 常见问题
 
 **Q：LINUX DO 显示「异常」？**
-这个来源依赖 Jina Reader 免费服务，偶尔会被限流，下一轮会自动重试。
+这个来源依赖 Jina Reader 免费服务，免费额度按出口 IP 计算。在 Muse 等托管平台上，很多应用共用一个 IP，容易被限流（悬停标签可以看到 `HTTP 429`）。抓取失败时会自动重试 2 次，仍然失败就在 [jina.ai/reader](https://jina.ai/reader) 免费申请一个 Key，填到 `JINA_API_KEY`（Muse 上写入 app_settings 的 `jina_key`）后重启。
 
 **Q：「测试推送」失败？**
 检查 `.env` 里的 `XIZHI_KEY` 是不是只填了 Key 本身，改完要重启服务。

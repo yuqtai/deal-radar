@@ -474,6 +474,35 @@ async function sendXizhiPush(ctx: Ctx, title: string, content: string): Promise<
   }
 }
 
+// 失败重试：限流（429）、服务端错误（5xx）、超时/网络错误最多再试 2 次，间隔 3s、8s。
+// Muse 等托管平台出口 IP 多应用共用，Jina 免费额度按 IP 计，偶发 429 很常见。
+const RETRY_DELAYS_MS = [3000, 8000];
+
+async function fetchWithRetry(url: string, extraHeaders?: Record<string, string>): Promise<string> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      return await fetchText(url, extraHeaders);
+    } catch (e) {
+      lastErr = e;
+      const msg = e instanceof Error ? e.message : String(e);
+      const m = msg.match(/^HTTP (\d+)/);
+      const retryable = !m || m[1] === "429" || Number(m[1]) >= 500;
+      if (!retryable || attempt === RETRY_DELAYS_MS.length) break;
+      await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+    }
+  }
+  const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  throw new Error(msg === "HTTP 429" ? "HTTP 429，被限流，可配置 JINA_API_KEY 解决" : msg);
+}
+
+// 可选 Jina Key（app_settings.jina_key）：按 Key 计额度，不再和同 IP 的其他人共用免费额度。
+async function getJinaKey(ctx: Ctx): Promise<string> {
+  const db = ctx.db<typeof schema>();
+  const rows = await db.select().from(schema.appSettings).where(eq(schema.appSettings.key, "jina_key"));
+  return rows[0]?.value?.trim() ?? "";
+}
+
 async function fetchText(url: string, extraHeaders?: Record<string, string>): Promise<string> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 20000);
@@ -894,10 +923,13 @@ export const Actions = {
       const runRow = runInsert[0];
       if (!runRow) throw new Error("refreshDeals: run insert failed");
 
+      const jinaKey = await getJinaKey(ctx);
       const results = await Promise.all(
         SOURCES.map(async (s) => {
           try {
-            const text = await fetchText(s.url, s.headers);
+            const headers =
+              s.kind === "jina" && jinaKey ? { ...s.headers, Authorization: `Bearer ${jinaKey}` } : s.headers;
+            const text = await fetchWithRetry(s.url, headers);
             // jina：优先按原始 RSS XML 解析（带摘要），不是 XML 时退回 Markdown 解析
             const looksXml = /<(rss|feed)[\s>]/.test(text.slice(0, 2000));
             const items =

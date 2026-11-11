@@ -10,6 +10,7 @@
 //   OPENROUTER_API_KEY  OpenRouter Key，用于 AI 评分/分类/排行榜（可选）
 //   OPENROUTER_MODEL    默认 parallel/decisions-fast:free
 //   PUSH_QUIET_HOURS    推送静默时段（北京时间），默认 23-8；off = 关闭
+//   JINA_API_KEY        Jina Reader Key（可选），LINUX DO 被限流（HTTP 429）时配置
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -56,6 +57,7 @@ if (isReal(process.env.OPENROUTER_API_KEY)) {
   configured.push("AI 评分");
 }
 if (isReal(process.env.OPENROUTER_MODEL)) putSetting.run("openrouter_model", process.env.OPENROUTER_MODEL.trim());
+if (isReal(process.env.JINA_API_KEY)) putSetting.run("jina_key", process.env.JINA_API_KEY.trim());
 if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", process.env.PUSH_QUIET_HOURS.trim());
 
 const ctx = makeCtx(sqlite);

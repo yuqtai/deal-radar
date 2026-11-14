@@ -10,6 +10,8 @@
 //   OPENROUTER_API_KEY  OpenRouter Key，用于 AI 评分/分类/排行榜（可选）
 //   OPENROUTER_MODEL    默认 baidu/ernie-5.5-flash-preview:free（免费，失败自动换备用模型）
 //   PUSH_QUIET_HOURS    推送静默时段（北京时间），默认 23-8；off = 关闭
+//   TYPESAFE_API_KEY    TypeSafe Jev Key（可选），配置后 AI 评分优先用 Jev，失败退回 OpenRouter
+//   TYPESAFE_MODEL      默认 jev-latest
 //   JINA_API_KEY        Jina Reader Key（可选），LINUX DO 被限流（HTTP 429）时配置
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
@@ -57,6 +59,11 @@ if (isReal(process.env.OPENROUTER_API_KEY)) {
   configured.push("AI 评分");
 }
 if (isReal(process.env.OPENROUTER_MODEL)) putSetting.run("openrouter_model", process.env.OPENROUTER_MODEL.trim());
+if (isReal(process.env.TYPESAFE_API_KEY)) {
+  putSetting.run("typesafe_key", process.env.TYPESAFE_API_KEY.trim());
+  configured.push("Jev 评分");
+}
+if (isReal(process.env.TYPESAFE_MODEL)) putSetting.run("typesafe_model", process.env.TYPESAFE_MODEL.trim());
 if (isReal(process.env.JINA_API_KEY)) putSetting.run("jina_key", process.env.JINA_API_KEY.trim());
 if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", process.env.PUSH_QUIET_HOURS.trim());
 
@@ -64,6 +71,7 @@ if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", pro
 const envManaged = [
   ["XIZHI_KEY", "xizhi_key"],
   ["OPENROUTER_API_KEY", "openrouter_key"],
+  ["TYPESAFE_API_KEY", "typesafe_key"],
   ["JINA_API_KEY", "jina_key"],
   ["PUSH_QUIET_HOURS", "push_quiet_hours"],
 ]

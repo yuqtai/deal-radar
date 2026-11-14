@@ -1,4 +1,9 @@
-// AI 价值评分 + 分类，两种接法：
+// AI 价值评分 + 分类。优先级：TypeSafe Jev（配置了 typesafe_key 时）→ OpenRouter。
+// Jev（https://docs.typesafe.ai）与 OpenRouter 决策接口是同一种「System One」格式：
+//   POST { model, state, questions: {id: {type: "score"|"choice", instructions, criteria}} }
+//   → { answers: {id: {score|choice, confidence, probabilities}} }
+//   Jev 接口：https://api.typesafe.ai/v1/systemone，模型 jev-latest，Key 为 TypeSafe Key。
+// OpenRouter 有两种接法：
 // 1) 默认：OpenRouter 免费对话模型（chat/completions），一次请求批量返回 JSON。
 //    2026-11 实测 parallel/decisions-fast:free 免费版已下线（只剩付费版），因此改为默认走这条。
 //    主模型失败（限流/下线）时依次尝试 FALLBACK_CHAT_MODELS。
@@ -21,6 +26,8 @@ import * as schema from "./schema";
 const ENDPOINT = "https://openrouter.ai/api/alpha/decisions";
 const CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 const DEFAULT_MODEL = "baidu/ernie-5.5-flash-preview:free";
+const JEV_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
+const JEV_DEFAULT_MODEL = "jev-latest";
 /** 免费模型随时可能限流或下线，主模型失败时按顺序换下一个 */
 const FALLBACK_CHAT_MODELS = [
   "baidu/ernie-5.5-flash-preview:free",
@@ -77,7 +84,39 @@ async function getSetting(ctx: Ctx, key: string): Promise<string> {
 }
 
 export async function aiEnabled(ctx: Ctx): Promise<boolean> {
-  return (await getSetting(ctx, "openrouter_key")) !== "";
+  return (await getSetting(ctx, "openrouter_key")) !== "" || (await getSetting(ctx, "typesafe_key")) !== "";
+}
+
+/** 测试 AI：用一条固定样例真实调用一次，Jev 和 OpenRouter 配了哪个测哪个 */
+export async function testAiConnection(ctx: Ctx): Promise<{ ok: boolean; message: string }> {
+  const sample: ScoreItem = { id: 1, title: "中国移动免费领 30G 流量，限时三天", summary: "", source: "测试" };
+  const show = (r: AiResult | undefined) =>
+    `样例得分 ${r?.score != null ? Math.min(100, Math.round((r.score / 0.5) * 100)) : "—"}，分类「${r?.category ?? "—"}」`;
+  const lines: string[] = [];
+  let ok = false;
+  const jevKey = await getSetting(ctx, "typesafe_key");
+  if (jevKey) {
+    const model = (await getSetting(ctx, "typesafe_model")) || JEV_DEFAULT_MODEL;
+    try {
+      lines.push(`Jev 正常（${model}）：${show((await judgeSystemOne(JEV_ENDPOINT, jevKey, model, [sample])).get(1))}`);
+      ok = true;
+    } catch (e) {
+      lines.push(`Jev 失败：${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+    }
+  }
+  const orKey = await getSetting(ctx, "openrouter_key");
+  if (orKey) {
+    const configured = await getSetting(ctx, "openrouter_model");
+    const model = configured && !RETIRED_MODELS.has(configured) ? configured : DEFAULT_MODEL;
+    try {
+      lines.push(`OpenRouter 正常（${model}）：${show((await judgeBatch(orKey, model, [sample])).get(1))}`);
+      ok = true;
+    } catch (e) {
+      lines.push(`OpenRouter 失败：${e instanceof Error ? e.message.slice(0, 120) : String(e)}`);
+    }
+  }
+  if (lines.length === 0) return { ok: false, message: "还没配置 AI：填写 Jev Key 或 OpenRouter Key" };
+  return { ok, message: lines.join("；") };
 }
 
 interface ScoreItem {
@@ -180,6 +219,16 @@ async function judgeBatchChatWithFallback(
 
 async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promise<Map<number, AiResult>> {
   if (!model.startsWith("parallel/decisions")) return judgeBatchChatWithFallback(key, model, items);
+  return judgeSystemOne(ENDPOINT, key, model, items);
+}
+
+/** System One 格式（Jev / OpenRouter 决策接口通用）：每条帖子同时问「价值分」和「类别」 */
+async function judgeSystemOne(
+  endpoint: string,
+  key: string,
+  model: string,
+  items: ScoreItem[],
+): Promise<Map<number, AiResult>> {
   const state: Record<string, string> = {};
   const questions: Record<string, unknown> = {};
   for (const it of items) {
@@ -199,7 +248,7 @@ async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promi
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(ENDPOINT, {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model, state, questions }),
@@ -216,7 +265,8 @@ async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promi
       const r: AiResult = {};
       const sc = data.answers?.[`${k}_score`];
       if (sc && typeof sc.score === "number" && Number.isFinite(sc.score)) {
-        r.score = Math.min(1, Math.max(0, sc.score));
+        // score 是档位数轴上的位置（0 ~ 档位数-1）；这里两档，归一化后即 0~1
+        r.score = Math.min(1, Math.max(0, sc.score / (SCORE_CRITERIA.length - 1)));
         r.confidence = sc.confidence ?? 0;
       }
       const cat = data.answers?.[`${k}_cat`];
@@ -238,10 +288,25 @@ async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promi
 /** 给尚未评分或尚未分类的条目跑一遍 AI（可限定 id），返回成功处理条数。 */
 export async function scorePendingDeals(ctx: Ctx, onlyIds?: number[]): Promise<number> {
   const key = await getSetting(ctx, "openrouter_key");
-  if (!key) return 0;
+  const jevKey = await getSetting(ctx, "typesafe_key");
+  if (!key && !jevKey) return 0;
+  const jevModel = (await getSetting(ctx, "typesafe_model")) || JEV_DEFAULT_MODEL;
   const configured = await getSetting(ctx, "openrouter_model");
   const model = configured && !RETIRED_MODELS.has(configured) ? configured : DEFAULT_MODEL;
-  const batchSize = model.startsWith("parallel/decisions") ? BATCH_SIZE : CHAT_BATCH_SIZE;
+  // 有 Jev 时按 System One 批量；只有 OpenRouter 对话模型时每批多评几条
+  const batchSize = jevKey || model.startsWith("parallel/decisions") ? BATCH_SIZE : CHAT_BATCH_SIZE;
+  // Jev 优先；失败且配了 OpenRouter 时退回 OpenRouter
+  const judge = async (batch: ScoreItem[]): Promise<Map<number, AiResult>> => {
+    if (jevKey) {
+      try {
+        return await judgeSystemOne(JEV_ENDPOINT, jevKey, jevModel, batch);
+      } catch (e) {
+        if (!key) throw e;
+        console.error(`[ai] jev failed, fallback to OpenRouter: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    return judgeBatch(key, model, batch);
+  };
   const db = ctx.db<typeof schema>();
   const pending = or(isNull(schema.deals.aiScore), isNull(schema.deals.aiCategory));
   const where = onlyIds && onlyIds.length > 0 ? and(pending, inArray(schema.deals.id, onlyIds)) : pending;
@@ -266,7 +331,7 @@ export async function scorePendingDeals(ctx: Ctx, onlyIds?: number[]): Promise<n
     while (next < batches.length) {
       const batch = batches[next++]!;
       try {
-        const result = await judgeBatch(key, model, batch);
+        const result = await judge(batch);
         const now = Date.now();
         for (const [id, r] of result) {
           await db

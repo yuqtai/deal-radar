@@ -350,11 +350,11 @@ function loadFilters(): Filters {
 }
 
 type Settings = ApiResponse<typeof api, "getSettings">;
-type KeyField = "xizhiKey" | "openrouterKey" | "jinaKey";
+type KeyField = "xizhiKey" | "openrouterKey" | "typesafeKey" | "jinaKey";
 
 const KEY_FIELDS: {
   field: KeyField;
-  stat: "xizhi" | "openrouter" | "jina";
+  stat: "xizhi" | "openrouter" | "typesafe" | "jina";
   label: string;
   hint: string;
   placeholder: string;
@@ -375,6 +375,14 @@ const KEY_FIELDS: {
     hint: "开启 AI 价值分、分类和排行榜（免费模型）",
     placeholder: "sk-or-v1-…",
     href: "https://openrouter.ai/keys",
+  },
+  {
+    field: "typesafeKey",
+    stat: "typesafe",
+    label: "AI 评分 · TypeSafe Jev Key（可选）",
+    hint: "System One 决策模型，配置后优先用 Jev 打分，失败自动退回 OpenRouter",
+    placeholder: "TypeSafe API Key",
+    href: "https://console.typesafe.ai",
   },
   {
     field: "jinaKey",
@@ -410,6 +418,12 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
       onToast({ ok: true, text: Object.values(args).every((v) => v === "") ? "已清除" : "已保存，立即生效" });
     },
     onError: (e) => onToast({ ok: false, text: e instanceof Error ? e.message : "保存失败" }),
+  });
+
+  const testAi = useMutation({
+    mutationFn: () => api.testAi({}),
+    onSuccess: (r) => onToast({ ok: r.ok, text: r.message }),
+    onError: () => onToast({ ok: false, text: "测试失败，请稍后再试" }),
   });
 
   const s = settings.data;
@@ -493,6 +507,18 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
               </div>
             );
           })}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={testAi.isPending || !(s.openrouter.set || s.typesafe.set)}
+              onClick={() => testAi.mutate()}
+              className={`${btnCls} gap-1.5 border border-[var(--border)] text-[var(--text)] hover:bg-[var(--accent-soft)]`}
+            >
+              {testAi.isPending && <Spinner />}
+              测试 AI 评分
+            </button>
+            <span className="text-xs text-[var(--dim)]">用一条样例真实调用一次，Jev / OpenRouter 配了哪个测哪个</span>
+          </div>
           <form
             className="flex flex-wrap items-center gap-1.5"
             onSubmit={(e) => {

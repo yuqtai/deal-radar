@@ -14,7 +14,7 @@
 import { defineAction, z, type ActionsModule, type Ctx } from "@hatch/space-sdk";
 import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import * as schema from "./schema";
-import { aiEnabled, scorePendingDeals } from "./ai";
+import { aiEnabled, scorePendingDeals, testAiConnection } from "./ai";
 
 type Category = "免费白嫖" | "限免" | "低价优惠" | "会员订阅" | "游戏" | "AI 相关" | "VPS/云服务" | "代理/机场" | "软件工具" | "交易/求购" | "讨论/资讯" | "其他";
 
@@ -813,6 +813,7 @@ const keyStatus = z.object({ set: z.boolean(), tail: z.string(), fromEnv: z.bool
 const settingsResponse = z.object({
   xizhi: keyStatus,
   openrouter: keyStatus,
+  typesafe: keyStatus,
   jina: keyStatus,
   quietHours: z.string(),
   error: z.string().nullable().optional(),
@@ -830,6 +831,7 @@ async function readSettings(ctx: Ctx): Promise<z.infer<typeof settingsResponse>>
   return {
     xizhi: st(XIZHI_KEY_SETTING),
     openrouter: st("openrouter_key"),
+    typesafe: st("typesafe_key"),
     jina: st("jina_key"),
     quietHours: map.get("push_quiet_hours") || "23-8",
   };
@@ -1214,6 +1216,7 @@ export const Actions = {
     request: z.object({
       xizhiKey: z.string().max(300).optional(),
       openrouterKey: z.string().max(300).optional(),
+      typesafeKey: z.string().max(300).optional(),
       jinaKey: z.string().max(300).optional(),
       quietHours: z.string().max(20).optional(),
     }),
@@ -1236,6 +1239,11 @@ export const Actions = {
         if (v && !v.startsWith("sk-or-")) error = "OpenRouter Key 格式不对：应为 sk-or- 开头";
         else writes.push(["openrouter_key", v]);
       }
+      if (args.typesafeKey !== undefined) {
+        const v = clean(args.typesafeKey);
+        if (v && (/\s/.test(v) || v.length < 8)) error = "Jev Key 格式不对：不能含空格，且至少 8 位";
+        else writes.push(["typesafe_key", v]);
+      }
       if (args.jinaKey !== undefined) {
         const v = clean(args.jinaKey);
         if (v && !/^jina_[\w-]+$/.test(v)) error = "Jina Key 格式不对：应为 jina_ 开头";
@@ -1255,6 +1263,15 @@ export const Actions = {
       }
       ctx.invalidateQueries();
       return { ...(await readSettings(ctx)), error: null };
+    },
+  }),
+
+  testAi: defineAction({
+    description: "用一条固定样例真实调用一次 AI（Jev / OpenRouter），验证 Key 是否可用。",
+    request: z.object({}),
+    response: z.object({ ok: z.boolean(), message: z.string() }),
+    async handler(ctx): Promise<{ ok: boolean; message: string }> {
+      return testAiConnection(ctx);
     },
   }),
 

@@ -114,6 +114,7 @@ docker compose up -d --build
 | `DATA_DIR` | 数据目录（SQLite） | `./data` |
 | `REFRESH_INTERVAL_MINUTES` | 自动刷新间隔，`0` 关闭 | `120` |
 | `PUSH_QUIET_HOURS` | 推送静默时段（北京时间），`off` 关闭 | `23-8` |
+| `TYPESAFE_API_KEY` | TypeSafe Jev Key，配置后 AI 评分优先用 [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev)，失败退回 OpenRouter | 空 |
 | `JINA_API_KEY` | Jina Reader Key，LINUX DO 被限流（HTTP 429）时配置，[免费申请](https://jina.ai/reader) | 空 |
 
 修改 `.env` 后重启服务生效。启动时 Key 会写入数据库 `app_settings` 表，服务端只从那里读取，**永远不会发到前端**。
@@ -148,7 +149,8 @@ docker compose up -d --build
 
 ### AI 评分与分类（`server/src/ai.ts`）
 
-- 默认用 OpenRouter 的**免费对话模型**（`chat/completions`）：每批 15 条帖子，一次请求让模型同时打 0~100 的价值分并从 12 个类别中选一个，以 JSON 返回。
+- 配置了 `TYPESAFE_API_KEY`（或在页面「设置」填 Jev Key）时，优先用 TypeSafe 的 **Jev**：调 `POST https://api.typesafe.ai/v1/systemone`，System One 格式（`state` + `questions`，每条帖子一道 `score` 题打价值分、一道 `choice` 题分类），失败自动退回 OpenRouter。
+- 没有 Jev 时用 OpenRouter 的**免费对话模型**（`chat/completions`）：每批 15 条帖子，一次请求让模型同时打 0~100 的价值分并从 12 个类别中选一个，以 JSON 返回。
   - 免费模型随时可能限流或下线，主模型失败时会自动依次换用备用模型（ERNIE → Ling → Nemotron）。
   - `OPENROUTER_MODEL` 可以换成任意 OpenRouter 对话模型；填 `parallel/decisions-fast`（付费）时改走决策接口 `/api/alpha/decisions`。
   - 原来默认的 `parallel/decisions-fast:free` 免费版已于 2026-11 下线，配置里还写着它的会自动改用默认模型。

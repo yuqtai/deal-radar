@@ -43,6 +43,13 @@
       "when": 1794220000000,
       "tag": "0006_deals_ai_category",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1794660000000,
+      "tag": "0007_generic_decision_settings",
+      "breakpoints": true
     }
   ]
 }

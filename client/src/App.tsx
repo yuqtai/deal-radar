@@ -350,15 +350,30 @@ function loadFilters(): Filters {
 }
 
 type Settings = ApiResponse<typeof api, "getSettings">;
-type KeyField = "xizhiKey" | "openrouterKey" | "typesafeKey" | "jinaKey";
+type KeyField = "xizhiKey" | "openrouterKey" | "decisionKey" | "jinaKey";
+
+/** 决策格式（state + questions）常见接口，点一下填入；也可以手填任意兼容接口 */
+const DECISION_PRESETS = [
+  {
+    label: "OpenRouter · pplx-decider（免费）",
+    endpoint: "https://openrouter.ai/api/alpha/decisions",
+    model: "perplexity/pplx-decider-v1.3:free",
+  },
+  {
+    label: "OpenRouter · decisions-fast（付费）",
+    endpoint: "https://openrouter.ai/api/alpha/decisions",
+    model: "parallel/decisions-fast",
+  },
+  { label: "TypeSafe · Jev", endpoint: "https://api.typesafe.ai/v1/systemone", model: "jev-latest" },
+];
 
 const KEY_FIELDS: {
   field: KeyField;
-  stat: "xizhi" | "openrouter" | "typesafe" | "jina";
+  stat: "xizhi" | "openrouter" | "decision" | "jina";
   label: string;
   hint: string;
   placeholder: string;
-  href: string;
+  href?: string;
 }[] = [
   {
     field: "xizhiKey",
@@ -372,17 +387,16 @@ const KEY_FIELDS: {
     field: "openrouterKey",
     stat: "openrouter",
     label: "AI 评分 · OpenRouter Key",
-    hint: "开启 AI 价值分、分类和排行榜（免费模型）",
+    hint: "开启 AI 价值分、分类和排行榜；默认决策模型和兜底模型都免费",
     placeholder: "sk-or-v1-…",
     href: "https://openrouter.ai/keys",
   },
   {
-    field: "typesafeKey",
-    stat: "typesafe",
-    label: "AI 评分 · TypeSafe Jev Key（可选）",
-    hint: "System One 决策模型，配置后优先用 Jev 打分，失败自动退回 OpenRouter",
-    placeholder: "TypeSafe API Key",
-    href: "https://console.typesafe.ai",
+    field: "decisionKey",
+    stat: "decision",
+    label: "决策模型 Key（可选）",
+    hint: "决策接口不是 OpenRouter 时填写（如 TypeSafe Jev）；是 OpenRouter 时留空，自动用上面的 Key",
+    placeholder: "该接口的 API Key",
   },
   {
     field: "jinaKey",
@@ -399,9 +413,13 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
   const settings = useQuery({ queryKey: ["settings"], queryFn: () => api.getSettings({}) });
   const [drafts, setDrafts] = useState<Partial<Record<KeyField, string>>>({});
   const [quiet, setQuiet] = useState<string | null>(null);
+  // 决策模型接口 / 模型名的草稿；null = 未编辑，显示已保存的值
+  const [endpointDraft, setEndpointDraft] = useState<string | null>(null);
+  const [modelDraft, setModelDraft] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: (args: Partial<Record<KeyField | "quietHours", string>>) => api.saveSettings(args),
+    mutationFn: (args: Partial<Record<KeyField | "quietHours" | "decisionEndpoint" | "decisionModel", string>>) =>
+      api.saveSettings(args),
     onSuccess: (data: Settings, args) => {
       queryClient.setQueryData(["settings"], data);
       if (data.error) {
@@ -415,6 +433,8 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
         return next;
       });
       if ("quietHours" in args) setQuiet(null);
+      if ("decisionEndpoint" in args) setEndpointDraft(null);
+      if ("decisionModel" in args) setModelDraft(null);
       onToast({ ok: true, text: Object.values(args).every((v) => v === "") ? "已清除" : "已保存，立即生效" });
     },
     onError: (e) => onToast({ ok: false, text: e instanceof Error ? e.message : "保存失败" }),
@@ -457,15 +477,15 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
                   </span>
                 </div>
                 <p className="mt-0.5 text-xs text-[var(--dim)]">
-                  {f.hint} ·{" "}
-                  <a
+                  {f.hint}
+                  {f.href && <> · <a
                     href={f.href}
                     target="_blank"
                     rel="noreferrer"
                     className="underline underline-offset-2 hover:text-[var(--text)]"
                   >
                     获取
-                  </a>
+                  </a></>}
                 </p>
                 <form
                   className="mt-1.5 flex gap-1.5"
@@ -507,17 +527,78 @@ function SettingsPanel({ onToast }: { onToast: (t: { ok: boolean; text: string }
               </div>
             );
           })}
+          <form
+            className="rounded-md border border-dashed border-[var(--border)] p-2.5"
+            onSubmit={(e) => {
+              e.preventDefault();
+              save.mutate({
+                decisionEndpoint: endpointDraft ?? s.decisionEndpoint,
+                decisionModel: modelDraft ?? s.decisionModel,
+              });
+            }}
+          >
+            <p className="text-xs font-medium text-[var(--text)]">决策模型（state + questions 格式，优先使用）</p>
+            <p className="mt-0.5 text-xs text-[var(--dim)]">
+              自定义接口地址、模型和 Key；配置了 OpenRouter Key 时，失败自动切换备用对话模型。快速填入：
+            </p>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {DECISION_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() => {
+                    setEndpointDraft(p.endpoint);
+                    setModelDraft(p.model);
+                  }}
+                  className="inline-flex h-7 items-center rounded-md border border-[var(--border)] px-2 text-xs text-[var(--dim)] hover:text-[var(--text)]"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 grid gap-1.5 sm:grid-cols-[1fr_auto]">
+              <input
+                aria-label="决策接口地址"
+                value={endpointDraft ?? s.decisionEndpoint}
+                onChange={(e) => setEndpointDraft(e.target.value)}
+                placeholder="接口地址，如 https://openrouter.ai/api/alpha/decisions"
+                spellCheck={false}
+                className={inputCls}
+              />
+              <span className="hidden" />
+              <input
+                aria-label="决策模型名"
+                value={modelDraft ?? s.decisionModel}
+                onChange={(e) => setModelDraft(e.target.value)}
+                placeholder="模型名，如 perplexity/pplx-decider-v1.3:free"
+                spellCheck={false}
+                className={inputCls}
+              />
+              <button
+                type="submit"
+                disabled={
+                  save.isPending ||
+                  ((endpointDraft ?? s.decisionEndpoint) === s.decisionEndpoint &&
+                    (modelDraft ?? s.decisionModel) === s.decisionModel)
+                }
+                className={`${btnCls} bg-[var(--accent)] text-[var(--accent-foreground)] hover:opacity-90`}
+              >
+                保存
+              </button>
+            </div>
+            <p className="mt-1.5 text-xs text-[var(--dim)]">接口和模型留空后保存可恢复默认值；若在 .env 中配置，重启后以 .env 为准。</p>
+          </form>
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
-              disabled={testAi.isPending || !(s.openrouter.set || s.typesafe.set)}
+              disabled={testAi.isPending || !(s.openrouter.set || s.decision.set)}
               onClick={() => testAi.mutate()}
               className={`${btnCls} gap-1.5 border border-[var(--border)] text-[var(--text)] hover:bg-[var(--accent-soft)]`}
             >
               {testAi.isPending && <Spinner />}
               测试 AI 评分
             </button>
-            <span className="text-xs text-[var(--dim)]">用一条样例真实调用一次，Jev / OpenRouter 配了哪个测哪个</span>
+            <span className="text-xs text-[var(--dim)]">用一条样例真实调用一次决策模型和兜底模型</span>
           </div>
           <form
             className="flex flex-wrap items-center gap-1.5"

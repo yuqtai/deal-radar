@@ -73,7 +73,7 @@ docker compose up -d --build
    - bun-plugin-tailwind 这个 devDependency 如果和平台构建冲突，可以删掉，平台 SDK 自带 Tailwind 构建。
 3. 检查 bunfig.toml：如果末尾的 [serve.static] plugins 配置和平台冲突，删掉这一段，其余保持不变。
 4. space.json 保持原样。它已经声明了 runtime=typescript、entry=client/dist/index.html，以及每 2 小时调用 refreshDeals 的托管定时任务（managedCronJobs）。如果当前平台要求的 platformVersion 不同，按平台要求更新。
-5. 数据库：按文件名顺序应用 drizzle/ 下的全部迁移（0001 到 0006，drizzle/meta/_journal.json 里有登记）。不要跳过，也不要修改已有迁移。
+5. 数据库：按文件名顺序应用 drizzle/ 下的全部迁移（0001 到 0007，drizzle/meta/_journal.json 里有登记）。不要跳过，也不要修改已有迁移。
 6. 运行 bun install、bun run typecheck、bun run build，确认全部通过。如果类型检查报错，先确认是不是 SDK 版本的类型差异，修复时不要改动业务逻辑（抓取、分类、AI 评分、推送规则）。
 7. 部署 Space，打开页面。数据库为空时页面会自动抓取一轮，确认 6 个来源能显示状态、列表有数据。
 
@@ -114,7 +114,9 @@ docker compose up -d --build
 | `DATA_DIR` | 数据目录（SQLite） | `./data` |
 | `REFRESH_INTERVAL_MINUTES` | 自动刷新间隔，`0` 关闭 | `120` |
 | `PUSH_QUIET_HOURS` | 推送静默时段（北京时间），`off` 关闭 | `23-8` |
-| `TYPESAFE_API_KEY` | TypeSafe Jev Key，配置后 AI 评分优先用 [Jev](https://typesafe.ai/blog/introducing-system-one-models-and-jev)，失败退回 OpenRouter | 空 |
+| `DECISION_ENDPOINT` | System One 决策接口完整地址，可自定义为任意兼容服务 | `https://openrouter.ai/api/alpha/decisions` |
+| `DECISION_MODEL` | 决策模型名 | `perplexity/pplx-decider-v1.3:free` |
+| `DECISION_API_KEY` | 决策接口 Key；OpenRouter 接口可留空复用 `OPENROUTER_API_KEY` | 空 |
 | `JINA_API_KEY` | Jina Reader Key，LINUX DO 被限流（HTTP 429）时配置，[免费申请](https://jina.ai/reader) | 空 |
 
 修改 `.env` 后重启服务生效。启动时 Key 会写入数据库 `app_settings` 表，服务端只从那里读取，**永远不会发到前端**。
@@ -149,11 +151,12 @@ docker compose up -d --build
 
 ### AI 评分与分类（`server/src/ai.ts`）
 
-- 配置了 `TYPESAFE_API_KEY`（或在页面「设置」填 Jev Key）时，优先用 TypeSafe 的 **Jev**：调 `POST https://api.typesafe.ai/v1/systemone`，System One 格式（`state` + `questions`，每条帖子一道 `score` 题打价值分、一道 `choice` 题分类），失败自动退回 OpenRouter。
-- 没有 Jev 时用 OpenRouter 的**免费对话模型**（`chat/completions`）：每批 15 条帖子，一次请求让模型同时打 0~100 的价值分并从 12 个类别中选一个，以 JSON 返回。
-  - 免费模型随时可能限流或下线，主模型失败时会自动依次换用备用模型（ERNIE → Ling → Nemotron）。
-  - `OPENROUTER_MODEL` 可以换成任意 OpenRouter 对话模型；填 `parallel/decisions-fast`（付费）时改走决策接口 `/api/alpha/decisions`。
-  - 原来默认的 `parallel/decisions-fast:free` 免费版已于 2026-11 下线，配置里还写着它的会自动改用默认模型。
+- **优先使用通用决策格式**：发送 `POST { model, state, questions }`，读取 `answers` 中的分数、类别与置信度。每批 8 条，每条一道 `score` 价值题和一道 `choice` 分类题。接口地址、模型名和 Key 都可自定义，不绑定平台。
+- 页面右上角「设置」可填写「决策模型 Key」、接口地址和模型名，也可快速填入 OpenRouter 或 TypeSafe 示例。默认使用 [OpenRouter Decider V1.3 免费模型](https://openrouter.ai/perplexity/pplx-decider-v1.3:free)，OpenRouter 接口未填独立 Key 时复用 OpenRouter Key。其他接口需要填写自己的 Key。
+- 例如接 TypeSafe Jev：接口填 `https://api.typesafe.ai/v1/systemone`，模型填 `jev-latest`，Key 填对应服务的 Key。接其他兼容服务时只需替换这三项。
+- 决策接口失败、返回无效评分或未配置可用 Key 时，若配置了 OpenRouter Key，会退回 **OpenRouter 对话模型**（`chat/completions`，每批 15 条）。默认 ERNIE，失败依次尝试 Ling、Nemotron。`OPENROUTER_MODEL` 只用于这个备用对话模型。
+- 点「测试 AI 评分」会用固定样例分别验证已配置的决策接口与备用对话模型，并显示各自结果。密钥仅在服务端保存，页面只返回配置状态与末 4 位。
+- 旧版数据库中的 Jev Key / 模型会通过 `0007_generic_decision_settings.sql` 自动迁移，已填写的新决策配置优先；旧环境变量 `TYPESAFE_API_KEY` / `TYPESAFE_MODEL` 在未填写新 `DECISION_*` 配置时继续生效。已有历史评分不会重写。
 - **分档**（页面和推送显示的 0~100 分）：≥80 高价值、≥60 值得看、≥30 一般，其余价值低；推送门槛 60 分。
 - **类别**：免费白嫖、限免、低价优惠、会员订阅、游戏、AI 相关、VPS/云服务、代理/机场、软件工具、交易/求购、讨论/资讯、其他。
   - 分类置信度不够时，退回关键词规则。
@@ -179,7 +182,7 @@ client/                 前端（React 19 + TanStack Query + Tailwind CSS v4）
   src/App.tsx           主界面：列表、AI 排行榜、筛选、卡片
 server/src/
   actions.ts            服务端动作：抓取、解析、分类、推送、仪表盘
-  ai.ts                 AI 评分与分类（OpenRouter 免费模型）
+  ai.ts                 通用 System One 决策评分与分类 + 对话模型回退
   schema.ts             数据表定义（Drizzle ORM）
 drizzle/                数据库迁移 SQL（启动时自动按顺序执行）
 standalone/

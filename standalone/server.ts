@@ -10,8 +10,9 @@
 //   OPENROUTER_API_KEY  OpenRouter Key，用于 AI 评分/分类/排行榜（可选）
 //   OPENROUTER_MODEL    默认 baidu/ernie-5.5-flash-preview:free（免费，失败自动换备用模型）
 //   PUSH_QUIET_HOURS    推送静默时段（北京时间），默认 23-8；off = 关闭
-//   TYPESAFE_API_KEY    TypeSafe Jev Key（可选），配置后 AI 评分优先用 Jev，失败退回 OpenRouter
-//   TYPESAFE_MODEL      默认 jev-latest
+//   DECISION_ENDPOINT   决策格式（state + questions）接口地址，默认 OpenRouter /api/alpha/decisions
+//   DECISION_MODEL      决策模型，默认 perplexity/pplx-decider-v1.3:free
+//   DECISION_API_KEY    决策接口 Key；接口是 OpenRouter 时可不填，复用 OPENROUTER_API_KEY
 //   JINA_API_KEY        Jina Reader Key（可选），LINUX DO 被限流（HTTP 429）时配置
 import { Database } from "bun:sqlite";
 import { mkdirSync, readFileSync, readdirSync } from "node:fs";
@@ -59,11 +60,21 @@ if (isReal(process.env.OPENROUTER_API_KEY)) {
   configured.push("AI 评分");
 }
 if (isReal(process.env.OPENROUTER_MODEL)) putSetting.run("openrouter_model", process.env.OPENROUTER_MODEL.trim());
-if (isReal(process.env.TYPESAFE_API_KEY)) {
-  putSetting.run("typesafe_key", process.env.TYPESAFE_API_KEY.trim());
-  configured.push("Jev 评分");
+if (isReal(process.env.DECISION_API_KEY)) {
+  putSetting.run("decision_key", process.env.DECISION_API_KEY.trim());
+  configured.push("决策模型评分");
 }
-if (isReal(process.env.TYPESAFE_MODEL)) putSetting.run("typesafe_model", process.env.TYPESAFE_MODEL.trim());
+if (isReal(process.env.DECISION_ENDPOINT)) putSetting.run("decision_endpoint", process.env.DECISION_ENDPOINT.trim());
+if (isReal(process.env.DECISION_MODEL)) putSetting.run("decision_model", process.env.DECISION_MODEL.trim());
+// Compatibility with the previous Jev-only environment variables.
+const legacyJevEnv = isReal(process.env.TYPESAFE_API_KEY) &&
+  ![process.env.DECISION_API_KEY, process.env.DECISION_ENDPOINT, process.env.DECISION_MODEL].some(isReal);
+if (legacyJevEnv) {
+  putSetting.run("decision_key", process.env.TYPESAFE_API_KEY!.trim());
+  putSetting.run("decision_endpoint", "https://api.typesafe.ai/v1/systemone");
+  putSetting.run("decision_model", isReal(process.env.TYPESAFE_MODEL) ? process.env.TYPESAFE_MODEL.trim() : "jev-latest");
+  configured.push("决策模型评分（兼容旧 Jev 配置）");
+}
 if (isReal(process.env.JINA_API_KEY)) putSetting.run("jina_key", process.env.JINA_API_KEY.trim());
 if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", process.env.PUSH_QUIET_HOURS.trim());
 
@@ -71,12 +82,13 @@ if (isReal(process.env.PUSH_QUIET_HOURS)) putSetting.run("push_quiet_hours", pro
 const envManaged = [
   ["XIZHI_KEY", "xizhi_key"],
   ["OPENROUTER_API_KEY", "openrouter_key"],
-  ["TYPESAFE_API_KEY", "typesafe_key"],
+  ["DECISION_API_KEY", "decision_key"],
   ["JINA_API_KEY", "jina_key"],
   ["PUSH_QUIET_HOURS", "push_quiet_hours"],
 ]
   .filter(([env]) => isReal(process.env[env!]))
   .map(([, key]) => key);
+if (legacyJevEnv) envManaged.push("decision_key");
 putSetting.run("env_managed", envManaged.join(","));
 
 const ctx = makeCtx(sqlite);

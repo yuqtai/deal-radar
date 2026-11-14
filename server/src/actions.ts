@@ -14,7 +14,13 @@
 import { defineAction, z, type ActionsModule, type Ctx } from "@hatch/space-sdk";
 import { and, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import * as schema from "./schema";
-import { aiEnabled, scorePendingDeals, testAiConnection } from "./ai";
+import {
+  DEFAULT_DECISION_ENDPOINT,
+  DEFAULT_DECISION_MODEL,
+  aiEnabled,
+  scorePendingDeals,
+  testAiConnection,
+} from "./ai";
 
 type Category = "免费白嫖" | "限免" | "低价优惠" | "会员订阅" | "游戏" | "AI 相关" | "VPS/云服务" | "代理/机场" | "软件工具" | "交易/求购" | "讨论/资讯" | "其他";
 
@@ -813,9 +819,11 @@ const keyStatus = z.object({ set: z.boolean(), tail: z.string(), fromEnv: z.bool
 const settingsResponse = z.object({
   xizhi: keyStatus,
   openrouter: keyStatus,
-  typesafe: keyStatus,
+  decision: keyStatus,
   jina: keyStatus,
   quietHours: z.string(),
+  decisionEndpoint: z.string(),
+  decisionModel: z.string(),
   error: z.string().nullable().optional(),
 });
 
@@ -831,9 +839,11 @@ async function readSettings(ctx: Ctx): Promise<z.infer<typeof settingsResponse>>
   return {
     xizhi: st(XIZHI_KEY_SETTING),
     openrouter: st("openrouter_key"),
-    typesafe: st("typesafe_key"),
+    decision: st("decision_key"),
     jina: st("jina_key"),
     quietHours: map.get("push_quiet_hours") || "23-8",
+    decisionEndpoint: map.get("decision_endpoint") || DEFAULT_DECISION_ENDPOINT,
+    decisionModel: map.get("decision_model") || DEFAULT_DECISION_MODEL,
   };
 }
 
@@ -1216,7 +1226,9 @@ export const Actions = {
     request: z.object({
       xizhiKey: z.string().max(300).optional(),
       openrouterKey: z.string().max(300).optional(),
-      typesafeKey: z.string().max(300).optional(),
+      decisionKey: z.string().max(300).optional(),
+      decisionEndpoint: z.string().max(300).optional(),
+      decisionModel: z.string().max(200).optional(),
       jinaKey: z.string().max(300).optional(),
       quietHours: z.string().max(20).optional(),
     }),
@@ -1239,10 +1251,27 @@ export const Actions = {
         if (v && !v.startsWith("sk-or-")) error = "OpenRouter Key 格式不对：应为 sk-or- 开头";
         else writes.push(["openrouter_key", v]);
       }
-      if (args.typesafeKey !== undefined) {
-        const v = clean(args.typesafeKey);
-        if (v && (/\s/.test(v) || v.length < 8)) error = "Jev Key 格式不对：不能含空格，且至少 8 位";
-        else writes.push(["typesafe_key", v]);
+      if (args.decisionKey !== undefined) {
+        const v = clean(args.decisionKey);
+        if (v && (/\s/.test(v) || v.length < 8)) error = "决策模型 Key 格式不对：不能含空格，且至少 8 位";
+        else writes.push(["decision_key", v]);
+      }
+      if (args.decisionEndpoint !== undefined) {
+        const v = args.decisionEndpoint.trim().replace(/\/+$/, "");
+        let valid = true;
+        if (v) {
+          try {
+            const url = new URL(v);
+            valid = ["http:", "https:"].includes(url.protocol) && !!url.hostname &&
+              !url.username && !url.password && !url.hash && !/\s/.test(v);
+          } catch { valid = false; }
+        }
+        if (!valid) error = "接口地址格式不对：请填写完整的 http:// 或 https:// 接口地址（不含用户名、密码或片段）";
+        else writes.push(["decision_endpoint", v === DEFAULT_DECISION_ENDPOINT ? "" : v]);
+      }
+      if (args.decisionModel !== undefined) {
+        const v = args.decisionModel.trim();
+        writes.push(["decision_model", v === DEFAULT_DECISION_MODEL ? "" : v]);
       }
       if (args.jinaKey !== undefined) {
         const v = clean(args.jinaKey);
@@ -1267,7 +1296,7 @@ export const Actions = {
   }),
 
   testAi: defineAction({
-    description: "用一条固定样例真实调用一次 AI（Jev / OpenRouter），验证 Key 是否可用。",
+    description: "用一条固定样例真实调用一次 AI（决策模型 / 兜底对话模型），验证配置是否可用。",
     request: z.object({}),
     response: z.object({ ok: z.boolean(), message: z.string() }),
     async handler(ctx): Promise<{ ok: boolean; message: string }> {

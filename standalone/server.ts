@@ -8,7 +8,7 @@
 //   REFRESH_INTERVAL_MINUTES  自动刷新间隔（分钟），默认 120；0 = 关闭
 //   XIZHI_KEY           息知微信推送 Key（可选）
 //   OPENROUTER_API_KEY  OpenRouter Key，用于 AI 评分/分类/排行榜（可选）
-//   OPENROUTER_MODEL    默认 parallel/decisions-fast:free
+//   OPENROUTER_MODEL    默认 baidu/ernie-5.5-flash-preview:free（免费，失败自动换备用模型）
 //   PUSH_QUIET_HOURS    推送静默时段（北京时间），默认 23-8；off = 关闭
 //   JINA_API_KEY        Jina Reader Key（可选），LINUX DO 被限流（HTTP 429）时配置
 import { Database } from "bun:sqlite";

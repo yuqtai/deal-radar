@@ -81,7 +81,7 @@ docker compose up -d --build
 服务端只从数据库 app_settings 表读取密钥，永远不下发给前端。部署完成后问我要以下 Key，拿到后写入 app_settings 表；我没提供的就跳过，项目会自动关闭对应功能。
 - xizhi_key：息知微信推送 Key（XZ 开头，只要 Key 本身，不要完整 URL）
 - openrouter_key：OpenRouter Key（sk-or-v1- 开头），用于 AI 价值评分、分类和排行榜
-- 可选 openrouter_model：默认 parallel/decisions-fast:free，一般不用填
+- 可选 openrouter_model：默认 baidu/ernie-5.5-flash-preview:free（免费，失败自动换备用模型），一般不用填
 - 可选 push_quiet_hours：推送静默时段（北京时间），默认 "23-8"，写 "off" 关闭
 - 可选 jina_key：Jina Reader Key，LINUX DO 来源显示异常（HTTP 429 限流）时填写，在 https://jina.ai/reader 免费申请
 
@@ -109,7 +109,7 @@ docker compose up -d --build
 | --- | --- | --- |
 | `XIZHI_KEY` | 息知微信推送 Key（开启推送） | 空 |
 | `OPENROUTER_API_KEY` | OpenRouter Key（开启 AI 评分 / 分类 / 排行榜） | 空 |
-| `OPENROUTER_MODEL` | AI 决策模型 | `parallel/decisions-fast:free` |
+| `OPENROUTER_MODEL` | AI 模型（任意 OpenRouter 对话模型） | `baidu/ernie-5.5-flash-preview:free` |
 | `PORT` | 端口 | `3000` |
 | `DATA_DIR` | 数据目录（SQLite） | `./data` |
 | `REFRESH_INTERVAL_MINUTES` | 自动刷新间隔，`0` 关闭 | `120` |
@@ -148,11 +148,11 @@ docker compose up -d --build
 
 ### AI 评分与分类（`server/src/ai.ts`）
 
-- 用 OpenRouter 的**决策模型**。它**不走** `chat/completions`，而是调 `POST https://openrouter.ai/api/alpha/decisions`：
-  - `score` 题型：两条标准分别描述「低价值」和「高价值」，返回 0~1 的分数。
-  - `choice` 题型：在 12 个类别里单选，返回类别和置信度。
-  - 每条帖子在同一请求里同时打分和分类，每批 8 条，3 路并发。
-- **分档**：≥40 高价值、≥30 值得看、≥15 一般，其余价值低。这个模型整体给分偏低，阈值是按实测分布校准的。
+- 默认用 OpenRouter 的**免费对话模型**（`chat/completions`）：每批 15 条帖子，一次请求让模型同时打 0~100 的价值分并从 12 个类别中选一个，以 JSON 返回。
+  - 免费模型随时可能限流或下线，主模型失败时会自动依次换用备用模型（ERNIE → Ling → Nemotron）。
+  - `OPENROUTER_MODEL` 可以换成任意 OpenRouter 对话模型；填 `parallel/decisions-fast`（付费）时改走决策接口 `/api/alpha/decisions`。
+  - 原来默认的 `parallel/decisions-fast:free` 免费版已于 2026-11 下线，配置里还写着它的会自动改用默认模型。
+- **分档**（页面和推送显示的 0~100 分）：≥80 高价值、≥60 值得看、≥30 一般，其余价值低；推送门槛 60 分。
 - **类别**：免费白嫖、限免、低价优惠、会员订阅、游戏、AI 相关、VPS/云服务、代理/机场、软件工具、交易/求购、讨论/资讯、其他。
   - 分类置信度不够时，退回关键词规则。
   - 标题特征明确的交易帖（出 / 收 / 求开头）和讨论帖（问句结尾），以规则为准。
@@ -177,7 +177,7 @@ client/                 前端（React 19 + TanStack Query + Tailwind CSS v4）
   src/App.tsx           主界面：列表、AI 排行榜、筛选、卡片
 server/src/
   actions.ts            服务端动作：抓取、解析、分类、推送、仪表盘
-  ai.ts                 AI 评分与分类（OpenRouter decisions）
+  ai.ts                 AI 评分与分类（OpenRouter 免费模型）
   schema.ts             数据表定义（Drizzle ORM）
 drizzle/                数据库迁移 SQL（启动时自动按顺序执行）
 standalone/

@@ -1,5 +1,10 @@
-// AI 价值评分 + 分类：调用 OpenRouter 的 parallel/decisions 决策模型。
+// AI 价值评分 + 分类，两种接法：
+// 1) 默认：OpenRouter 免费对话模型（chat/completions），一次请求批量返回 JSON。
+//    2026-11 实测 parallel/decisions-fast:free 免费版已下线（只剩付费版），因此改为默认走这条。
+//    主模型失败（限流/下线）时依次尝试 FALLBACK_CHAT_MODELS。
+// 2) 可选：模型名以 parallel/decisions 开头时走决策接口（付费）。
 //
+// 决策接口说明：
 // 接口（2026-11-09 实测）：POST https://openrouter.ai/api/alpha/decisions
 //   { model, state: {<id>: "<条目文本>", ...}, questions: {<qid>: {...}, ...} }
 // - score 题型：criteria 为数组 [低端, 高端]，返回 score ∈ [0,1]，越接近高端越大。
@@ -14,8 +19,19 @@ import { and, eq, inArray, isNull, or } from "drizzle-orm";
 import * as schema from "./schema";
 
 const ENDPOINT = "https://openrouter.ai/api/alpha/decisions";
-const DEFAULT_MODEL = "parallel/decisions-fast:free";
+const CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
+const DEFAULT_MODEL = "baidu/ernie-5.5-flash-preview:free";
+/** 免费模型随时可能限流或下线，主模型失败时按顺序换下一个 */
+const FALLBACK_CHAT_MODELS = [
+  "baidu/ernie-5.5-flash-preview:free",
+  "inclusionai/ling-3.2-flash:free",
+  "nvidia/nemotron-3.5-lightning:free",
+];
+/** 已下线的免费模型：配置里还写着它时当作没配置，用默认模型 */
+const RETIRED_MODELS = new Set(["parallel/decisions-fast:free"]);
 const BATCH_SIZE = 8;
+/** 对话模型一次多评几条，省请求数（免费额度按请求数计） */
+const CHAT_BATCH_SIZE = 15;
 const CONCURRENCY = 3;
 const MAX_PER_RUN = 200;
 const TIMEOUT_MS = 40_000;
@@ -77,7 +93,93 @@ interface AiResult {
   category?: string;
 }
 
+// 对话模型打 0~100 分；存库时除以 200，与决策模型的分布对齐（其 ≥0.4 已是头部）：
+// 展示分 = 存储分 / 0.5 × 100，所以 100 分对应满分，推送门槛 0.3 对应 60 分。
+const CHAT_SCORE_DIVISOR = 200;
+
+function buildChatPrompt(items: ScoreItem[]): string {
+  const cats = Object.entries(AI_CATEGORIES)
+    .map(([k, v]) => `- ${k}：${v}`)
+    .join("\n");
+  const list = items
+    .map((it, i) => `${i + 1}. 【${it.source}】${it.title}${it.summary ? `；${it.summary.slice(0, 160)}` : ""}`)
+    .join("\n");
+  return `你是羊毛/优惠情报评审。对下面每条帖子：
+1) 打「对普通中国用户的实际价值」分，0-100 的整数。
+   高分：${SCORE_CRITERIA[1]!.description}
+   低分：${SCORE_CRITERIA[0]!.description}
+2) 从下列类别中选一个最贴切的（以标题为主，简介为辅），都不合适就填「其他」：
+${cats}
+
+只输出 JSON，不要任何解释：{"items":[{"i":序号,"score":整数,"category":"类别名"}]}
+
+${list}`;
+}
+
+async function judgeBatchChat(key: string, model: string, items: ScoreItem[]): Promise<Map<number, AiResult>> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 90_000);
+  try {
+    const res = await fetch(CHAT_ENDPOINT, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: buildChatPrompt(items) }],
+        temperature: 0,
+      }),
+      signal: ctrl.signal,
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${text.slice(0, 200)}`);
+    const data = JSON.parse(text) as { choices?: { message?: { content?: string } }[] };
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const json = content.match(/\{[\s\S]*\}/)?.[0];
+    if (!json) throw new Error(`模型没有返回 JSON：${content.slice(0, 120)}`);
+    const parsed = JSON.parse(json) as { items?: { i?: number; score?: number; category?: string }[] };
+    const out = new Map<number, AiResult>();
+    for (const row of parsed.items ?? []) {
+      const it = typeof row.i === "number" ? items[row.i - 1] : undefined;
+      if (!it) continue;
+      const r: AiResult = {};
+      if (typeof row.score === "number" && Number.isFinite(row.score)) {
+        r.score = Math.min(100, Math.max(0, row.score)) / CHAT_SCORE_DIVISOR;
+        r.confidence = 1;
+      }
+      const cat = row.category?.trim();
+      if (cat && cat in AI_CATEGORIES) r.category = cat;
+      if (r.score != null || r.category != null) out.set(it.id, r);
+    }
+    if (out.size === 0) throw new Error("模型返回的 JSON 里没有可用结果");
+    return out;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 对话模型：先用配置的模型，失败再按备选列表依次尝试 */
+async function judgeBatchChatWithFallback(
+  key: string,
+  model: string,
+  items: ScoreItem[],
+): Promise<Map<number, AiResult>> {
+  const chain = [model, ...FALLBACK_CHAT_MODELS.filter((m) => m !== model)];
+  let lastErr: unknown;
+  for (const m of chain) {
+    try {
+      return await judgeBatchChat(key, m, items);
+    } catch (e) {
+      lastErr = e;
+      console.error(`[ai] ${m} failed: ${e instanceof Error ? e.message : String(e)}`);
+      // Key 无效时换模型也没用
+      if (e instanceof Error && /^HTTP 401/.test(e.message)) break;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
+
 async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promise<Map<number, AiResult>> {
+  if (!model.startsWith("parallel/decisions")) return judgeBatchChatWithFallback(key, model, items);
   const state: Record<string, string> = {};
   const questions: Record<string, unknown> = {};
   for (const it of items) {
@@ -137,7 +239,9 @@ async function judgeBatch(key: string, model: string, items: ScoreItem[]): Promi
 export async function scorePendingDeals(ctx: Ctx, onlyIds?: number[]): Promise<number> {
   const key = await getSetting(ctx, "openrouter_key");
   if (!key) return 0;
-  const model = (await getSetting(ctx, "openrouter_model")) || DEFAULT_MODEL;
+  const configured = await getSetting(ctx, "openrouter_model");
+  const model = configured && !RETIRED_MODELS.has(configured) ? configured : DEFAULT_MODEL;
+  const batchSize = model.startsWith("parallel/decisions") ? BATCH_SIZE : CHAT_BATCH_SIZE;
   const db = ctx.db<typeof schema>();
   const pending = or(isNull(schema.deals.aiScore), isNull(schema.deals.aiCategory));
   const where = onlyIds && onlyIds.length > 0 ? and(pending, inArray(schema.deals.id, onlyIds)) : pending;
@@ -154,7 +258,7 @@ export async function scorePendingDeals(ctx: Ctx, onlyIds?: number[]): Promise<n
   if (rows.length === 0) return 0;
 
   const batches: ScoreItem[][] = [];
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) batches.push(rows.slice(i, i + BATCH_SIZE));
+  for (let i = 0; i < rows.length; i += batchSize) batches.push(rows.slice(i, i + batchSize));
 
   let done = 0;
   let next = 0;
